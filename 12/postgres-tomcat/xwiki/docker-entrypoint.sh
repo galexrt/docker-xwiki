@@ -148,6 +148,67 @@ function configure() {
     xwiki_set_properties 'solr.remote.url' "http://$INDEX_HOST:$INDEX_PORT/solr/xwiki"
   fi
 
+  if [ $JGROUPS == false ]; then
+    rm -f /usr/local/tomcat/webapps/ROOT/WEB-INF/observation/remote/jgroups/dns_ping.xml
+  else
+    echo '  Conmfiguring observations / jgroups'
+    xwiki_set_properties 'observation.remote.enabled' 'true'
+
+    xwiki_set_properties 'observation.remote.channels' 'dns_ping'
+    cat << 'EOF' > /usr/local/tomcat/webapps/ROOT/WEB-INF/observation/remote/jgroups/dns_ping.xml
+<config xmlns="urn:org:jgroups"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="urn:org:jgroups http://www.jgroups.org/schema/jgroups.xsd">
+    <TCP bind_port="7800"
+         recv_buf_size="${tcp.recv_buf_size:130k}"
+         send_buf_size="${tcp.send_buf_size:130k}"
+         max_bundle_size="64K"
+         sock_conn_timeout="300"
+
+         thread_pool.min_threads="0"
+         thread_pool.max_threads="20"
+         thread_pool.keep_alive_time="30000"/>
+
+    <dns.DNS_PING
+      dns_query="${env.XWIKI_DNS_QUERY:xwiki}"
+      async_discovery_use_separate_thread_per_request="true"
+      probe_transport_ports=""
+      num_discovery_runs="1"
+      dns_address="${env.XWIKI_DNS_ADDRESS:}"
+      dns_record_type="${env.XWIKI_DNS_RECORD_TYPE:}"/>
+
+    <PING />
+    <MERGE3 max_interval="30000"
+            min_interval="10000"/>
+    <FD_SOCK/>
+    <FD_ALL/>
+    <VERIFY_SUSPECT timeout="1500"  />
+    <BARRIER />
+    <pbcast.NAKACK2 xmit_interval="500"
+                    xmit_table_num_rows="100"
+                    xmit_table_msgs_per_row="2000"
+                    xmit_table_max_compaction_time="30000"
+                    use_mcast_xmit="false"
+                    discard_delivered_msgs="true"/>
+    <UNICAST3 xmit_interval="500"
+              xmit_table_num_rows="100"
+              xmit_table_msgs_per_row="2000"
+              xmit_table_max_compaction_time="60000"
+              conn_expiry_timeout="0"/>
+    <pbcast.STABLE desired_avg_gossip="50000"
+                   max_bytes="4M"/>
+    <pbcast.GMS print_local_addr="true" join_timeout="2000"/>
+    <UFC max_credits="10M"
+         min_threshold="0.4"/>
+    <MFC max_credits="10M"
+         min_threshold="0.4"/>
+    <FRAG2 frag_size="60K"  />
+    <RSVP resend_interval="2000" timeout="10000"/>
+    <pbcast.STATE_TRANSFER />
+</config>
+EOF
+  fi
+
   # If the files already exist then copy them to the XWiki's WEB-INF directory. Otherwise copy the default config
   # files to the permanent directory so that they can be easily modified by the user. They'll be synced at the next
   # start.

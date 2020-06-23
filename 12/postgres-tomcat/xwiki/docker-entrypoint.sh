@@ -21,9 +21,14 @@
 
 set -e
 
+XWIKI_VALIDATION_KEY="${XWIKI_VALIDATION_KEY:-$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 32 | head -n 1)}"
+XWIKI_VALIDATION_KEY="${XWIKI_VALIDATION_KEY%$'\n'}"
+XWIKI_ENCRYPTION_KEY="${XWIKI_ENCRYPTION_KEY:-$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 32 | head -n 1)}"
+XWIKI_ENCRYPTION_KEY="${XWIKI_ENCRYPTION_KEY%$'\n'}"
+
 function first_start() {
   configure
-  touch /usr/local/tomcat/webapps/$CONTEXT_PATH/.first_start_completed
+  touch "/usr/local/tomcat/webapps/$CONTEXT_PATH/.first_start_completed"
 }
 
 function other_starts() {
@@ -43,13 +48,21 @@ function xwiki_replace() {
 # $1 - the setting/property to set
 # $2 - the new value
 function xwiki_set_cfg() {
-  xwiki_replace /usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/xwiki.cfg "$1" "$2"
+  if ! grep -q "$1" "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/xwiki.cfg"; then
+    echo "$1=$2" >> "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/xwiki.cfg"
+  else
+    xwiki_replace "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/xwiki.cfg" "$1" "$2"
+  fi
 }
 
 # $1 - the setting/property to set
 # $2 - the new value
 function xwiki_set_properties() {
-  xwiki_replace /usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/xwiki.properties "$1" "$2"
+  if ! grep -q "$1" "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/xwiki.properties"; then
+    echo "$1=$2" >> "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/xwiki.properties"
+  else
+    xwiki_replace "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/xwiki.properties" "$1" "$2"
+  fi
 }
 
 # usage: file_env VAR [DEFAULT]
@@ -114,52 +127,56 @@ function configure() {
   file_env 'DB_DATABASE' 'xwiki'
   file_env 'INDEX_HOST' 'localhost'
   file_env 'INDEX_PORT' '8983'
+  file_env 'XWIKI_CFG_ADDITIONAL' ''
+  file_env 'XWIKI_PROPERTIES_ADDITIONAL' ''
 
   echo "  Deploying XWiki in the '$CONTEXT_PATH' context"
   if [ "$CONTEXT_PATH" == "ROOT" ]; then
     xwiki_set_cfg 'xwiki.webapppath' ''
   else
-    mv /usr/local/tomcat/webapps/ROOT /usr/local/tomcat/webapps/$CONTEXT_PATH
+    mv /usr/local/tomcat/webapps/ROOT "/usr/local/tomcat/webapps/$CONTEXT_PATH"
   fi
 
   echo 'Replacing environment variables in files'
-  safesed "replaceuser" $DB_USER /usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/hibernate.cfg.xml
-  safesed "replacepassword" $DB_PASSWORD /usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/hibernate.cfg.xml
-  safesed "replacecontainer" $DB_HOST /usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/hibernate.cfg.xml
-  safesed "replacedatabase" $DB_DATABASE /usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/hibernate.cfg.xml
+  safesed "replaceuser" "$DB_USER" "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/hibernate.cfg.xml"
+  safesed "replacepassword" "$DB_PASSWORD" "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/hibernate.cfg.xml"
+  safesed "replacecontainer" "$DB_HOST" "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/hibernate.cfg.xml"
+  safesed "replacedatabase" "$DB_DATABASE" "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/hibernate.cfg.xml"
 
   # Set any non-default main wiki database name in the xwiki.cfg file.
   if [ "$DB_DATABASE" != "xwiki" ]; then
-    xwiki_set_cfg "xwiki.db" $DB_DATABASE
+    xwiki_set_cfg "xwiki.db" "$DB_DATABASE"
   fi
 
   echo '  Generating authentication validation and encryption keys...'
-  xwiki_set_cfg 'xwiki.authentication.validationKey' "$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)"
-  xwiki_set_cfg 'xwiki.authentication.encryptionKey' "$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)"
+  xwiki_set_cfg 'xwiki.authentication.validationKey' "$XWIKI_VALIDATION_KEY"
+  xwiki_set_cfg 'xwiki.authentication.encryptionKey' "$XWIKI_ENCRYPTION_KEY"
 
   echo '  Setting permanent directory...'
   xwiki_set_properties 'environment.permanentDirectory' '/usr/local/xwiki/data'
   echo '  Configure libreoffice...'
   xwiki_set_properties 'openoffice.autoStart' 'true'
 
-  if [ $INDEX_HOST != 'localhost' ]; then
+  if [ "$INDEX_HOST" != 'localhost' ]; then
     echo '  Configuring remote Solr Index'
     xwiki_set_properties 'solr.type' 'remote'
     xwiki_set_properties 'solr.remote.url' "http://$INDEX_HOST:$INDEX_PORT/solr/xwiki"
   fi
 
-  if [ $JGROUPS == false ]; then
+  if [ "$CONFIGURE_JGROUPS" == 'false' ]; then
     rm -f /usr/local/tomcat/webapps/ROOT/WEB-INF/observation/remote/jgroups/dns_ping.xml
   else
-    echo '  Conmfiguring observations / jgroups'
+    echo '  Configuring JGroups...'
     xwiki_set_properties 'observation.remote.enabled' 'true'
 
     xwiki_set_properties 'observation.remote.channels' 'dns_ping'
+    sed -i 's/^#-# Example:observation\.remote\.channels=/observation\.remote\.channels=/g' "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/xwiki.properties"
     cat << 'EOF' > /usr/local/tomcat/webapps/ROOT/WEB-INF/observation/remote/jgroups/dns_ping.xml
 <config xmlns="urn:org:jgroups"
         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xsi:schemaLocation="urn:org:jgroups http://www.jgroups.org/schema/jgroups.xsd">
     <TCP bind_port="7800"
+         port_range="0"
          recv_buf_size="${tcp.recv_buf_size:130k}"
          send_buf_size="${tcp.send_buf_size:130k}"
          max_bundle_size="64K"
@@ -170,43 +187,58 @@ function configure() {
          thread_pool.keep_alive_time="30000"/>
 
     <dns.DNS_PING
-      dns_query="${env.XWIKI_DNS_QUERY:xwiki}"
+      dns_query="${env.DNS_QUERY:xwiki-discovery}"
       async_discovery_use_separate_thread_per_request="true"
-      probe_transport_ports=""
-      num_discovery_runs="1"
-      dns_address="${env.XWIKI_DNS_ADDRESS:}"
-      dns_record_type="${env.XWIKI_DNS_RECORD_TYPE:}"/>
+      probe_transport_ports="${env.DNS_PROBE_TRANSPORT_PORTS:false}"
+      num_discovery_runs="5"
+      dns_address="${env.DNS_ADDRESS:}"
+      dns_record_type="${env.DNS_RECORD_TYPE:A}"/>
 
-    <PING />
     <MERGE3 max_interval="30000"
             min_interval="10000"/>
     <FD_SOCK/>
-    <FD_ALL/>
+    <FD_ALL
+      timeout="10000"
+      interval="3000"
+      timeout_check_interval="2000"/>
     <VERIFY_SUSPECT timeout="1500"  />
     <BARRIER />
     <pbcast.NAKACK2 xmit_interval="500"
                     xmit_table_num_rows="100"
                     xmit_table_msgs_per_row="2000"
                     xmit_table_max_compaction_time="30000"
-                    use_mcast_xmit="false"
-                    discard_delivered_msgs="true"/>
-    <UNICAST3 xmit_interval="500"
+                    use_mcast_xmit="true"
+                    discard_delivered_msgs="true" />
+    <UNICAST3
               xmit_table_num_rows="100"
-              xmit_table_msgs_per_row="2000"
-              xmit_table_max_compaction_time="60000"
-              conn_expiry_timeout="0"/>
+              xmit_table_msgs_per_row="1000"
+              xmit_table_max_compaction_time="30000"/>
     <pbcast.STABLE desired_avg_gossip="50000"
-                   max_bytes="4M"/>
-    <pbcast.GMS print_local_addr="true" join_timeout="2000"/>
-    <UFC max_credits="10M"
+                   max_bytes="8m"/>
+    <pbcast.GMS print_local_addr="true" join_timeout="3000"
+                view_bundling="true" log_view_warnings="true" stats="true" print_physical_addrs="true" />
+    <UFC max_credits="2M"
          min_threshold="0.4"/>
-    <MFC max_credits="10M"
+    <MFC max_credits="2M"
          min_threshold="0.4"/>
     <FRAG2 frag_size="60K"  />
-    <RSVP resend_interval="2000" timeout="10000"/>
-    <pbcast.STATE_TRANSFER />
+    <RSVP/>
+    <!--pbcast.STATE /-->
+    <pbcast.STATE_TRANSFER  />
+    <!-- pbcast.FLUSH  /-->
 </config>
 EOF
+  fi
+
+  # Additional user provided for the xwiki.cfg file
+  if [ -n "$XWIKI_CFG_ADDITIONAL" ]; then
+    echo '  Adding additional xwiki.cfg ...'
+    echo "$XWIKI_CFG_ADDITIONAL" >> "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/xwiki.cfg"
+  fi
+  # Additional user provided for the xwiki.properties file
+  if [ -n "$XWIKI_PROPERTIES_ADDITIONAL" ]; then
+    echo '  Adding additional xwiki.properties ...'
+    echo "$XWIKI_PROPERTIES_ADDITIONAL" >> "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/xwiki.properties"
   fi
 
   # If the files already exist then copy them to the XWiki's WEB-INF directory. Otherwise copy the default config

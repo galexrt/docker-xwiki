@@ -228,6 +228,15 @@ function configure() {
     <!-- pbcast.FLUSH  /-->
 </config>
 EOF
+    
+  fi
+
+  if [ "$DISABLE_SCHEDULER_ON_OTHERS" == 'true'  ]; then
+    echo '  Disabling scheduler if not first host ...'
+    if [ "$(hostname | sed 's/[^0-9]*//g')" != "0" ]; then
+      sed -i '/com.xpn.xwiki.plugin.scheduler.SchedulerPlugin,\\/d' "/usr/local/tomcat/webapps/$CONTEXT_PATH/WEB-INF/xwiki.cfg"
+      echo "  Disabled scheduler because we are not the first host $(hostname)."
+    fi
   fi
 
   # Additional user provided for the xwiki.cfg file

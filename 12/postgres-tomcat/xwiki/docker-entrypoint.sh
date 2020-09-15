@@ -26,6 +26,8 @@ XWIKI_VALIDATION_KEY="${XWIKI_VALIDATION_KEY%$'\n'}"
 XWIKI_ENCRYPTION_KEY="${XWIKI_ENCRYPTION_KEY:-$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 32 | head -n 1)}"
 XWIKI_ENCRYPTION_KEY="${XWIKI_ENCRYPTION_KEY%$'\n'}"
 
+XWIKI_SESSION_TIMEOUT="${XWIKI_SESSION_TIMEOUT:-30}"
+
 function first_start() {
   configure
   touch "/usr/local/tomcat/webapps/$CONTEXT_PATH/.first_start_completed"
@@ -228,7 +230,6 @@ function configure() {
     <!-- pbcast.FLUSH  /-->
 </config>
 EOF
-    
   fi
 
   if [ "$DISABLE_SCHEDULER_ON_OTHERS" == 'true'  ]; then
@@ -257,6 +258,9 @@ EOF
   saveConfigurationFile 'hibernate.cfg.xml'
   saveConfigurationFile 'xwiki.cfg'
   saveConfigurationFile 'xwiki.properties'
+
+  # Set session timeout
+  sed -i 's~<session-timeout>.*</session-timeout>~<session-timeout>'"$XWIKI_SESSION_TIMEOUT"'</session-timeout>~g' /usr/local/tomcat/conf/web.xml
 }
 
 # This if will check if the first argument is a flag but only works if all arguments require a hyphenated flag
